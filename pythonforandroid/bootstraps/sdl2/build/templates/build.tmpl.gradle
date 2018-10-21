@@ -11,6 +11,10 @@ buildscript {
 allprojects {
     repositories {
         jcenter()
+	mavenCentral()
+	maven {
+            url "https://maven.google.com"
+        }
 	    flatDir {
 	    	dirs 'libs'
 	    }
@@ -75,4 +79,5 @@ dependencies {
 	compile '{{ depend }}'
 	{%- endfor %}
 	{%- endif %}
+	
 }

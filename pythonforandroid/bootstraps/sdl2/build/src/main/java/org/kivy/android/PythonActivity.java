@@ -11,6 +11,14 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Hashtable;
+import java.util.Map;
+
+import android.view.View;
+import android.view.Gravity;
+import android.os.Handler;
+import android.os.Message;
+import android.widget.FrameLayout;
 
 import android.view.ViewGroup;
 import android.view.SurfaceView;
@@ -34,6 +42,17 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 
+import com.google.android.gms.ads.AdListener;
+import com.google.android.gms.ads.AdRequest;
+import com.google.android.gms.ads.InterstitialAd;
+import com.google.android.gms.ads.MobileAds;
+import com.google.android.gms.ads.AdSize;
+import com.google.android.gms.ads.AdView;
+import com.google.ads.mediation.admob.AdMobAdapter;
+import com.google.android.gms.ads.reward.RewardedVideoAd;
+import com.google.android.gms.ads.reward.RewardedVideoAdListener;
+import com.google.android.gms.ads.reward.RewardItem;
+
 import org.libsdl.app.SDLActivity;
 
 import org.kivy.android.PythonUtil;
@@ -42,8 +61,7 @@ import org.kivy.android.launcher.Project;
 import org.renpy.android.ResourceManager;
 import org.renpy.android.AssetExtract;
 
-
-public class PythonActivity extends SDLActivity {
+public class PythonActivity extends SDLActivity{
     private static final String TAG = "PythonActivity";
 
     public static PythonActivity mActivity = null;
@@ -52,11 +70,222 @@ public class PythonActivity extends SDLActivity {
     private Bundle mMetaData = null;
     private PowerManager.WakeLock mWakeLock = null;
 
+    /* KivMob backend starts here. */
+    private static RewardedVideoAd mRewardedVideoAd = null;
+    private static String sRewardedUnitID;
+    private static AdView adView = null;
+    private static InterstitialAd interstitialAd = null;
+    private static ArrayList<String> testDevices = new ArrayList<String>();
+    
+
+    private static boolean rewardPlayer = false; //Updated to true when user has to be rewarded by watching Video to the end
+    private static String rewardType = ""; //Support for multiple types of rewards
+
+    public static void playerRewarded() {
+        rewardPlayer = false;
+        rewardType = "";
+    }
+    
+    public static String getRewardType() {
+        if (rewardPlayer) {
+            return rewardType;
+        } else {return "No reward";} //make sure you do not call your reward type "No reward"
+    }
+
+    public static enum AdCmd { INIT_ADS,
+                               ADD_TEST_DEVICE,
+                               NEW_BANNER,
+                               NEW_INTERSTITIAL,
+                               REQ_BANNER,
+                               REQ_INTERSTITIAL,
+                               SHOW_BANNER,
+                               SHOW_INTERSTITIAL,
+                               HIDE_BANNER,
+                               NEW_REWARDED,
+                               REQ_REWARDED,
+                               SHOW_REWARDED
+                             };
+
+    public static void loadRewardedVideoAd() {
+        mRewardedVideoAd.loadAd(mActivity.sRewardedUnitID, new AdRequest.Builder().build());
+    }
+    // Handles all comunication to ad threads.
+    public static Handler adHandler = new Handler() {
+    @Override
+    public void handleMessage(Message msg) {
+            AdRequest.Builder builder = new AdRequest.Builder();
+        switch (AdCmd.values()[msg.what]) {
+                case INIT_ADS:
+                    if (mRewardedVideoAd != null) {
+                        mRewardedVideoAd.destroy(mActivity);
+                    }
+                    mRewardedVideoAd = null;
+                    interstitialAd = null;
+                    MobileAds.initialize(mActivity, msg.getData().getString("appID"));
+                    break;
+                case ADD_TEST_DEVICE:
+                    testDevices.add(msg.getData().getString("deviceID"));
+                    break;
+                case NEW_BANNER:
+                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                        Gravity.CENTER_VERTICAL|Gravity.CENTER_HORIZONTAL);
+                    adView = new AdView(mActivity);
+                    adView.setAdSize(AdSize.SMART_BANNER);
+                    adView.setAdUnitId(msg.getData().getString("unitID"));
+                    adView.setLayoutParams(lp);
+                    adView.setVisibility(View.GONE);
+                    adView.setAdListener(new AdListener() {});
+                    ViewGroup layout = getLayout();
+                    layout.addView(adView);
+                    break;
+                case NEW_INTERSTITIAL:
+                    interstitialAd = new InterstitialAd(mActivity);
+                    interstitialAd.setAdUnitId(msg.getData().getString("unitID"));
+                    interstitialAd.setAdListener(new AdListener() {
+                        @Override
+                        public void onAdClosed() {
+                            // Load the next interstitial.
+                            try {
+                            interstitialAd.loadAd(new AdRequest.Builder().build());
+                            } catch (Exception e) {}
+                        }
+                    });
+                    break;
+                case NEW_REWARDED:
+                    // Use an activity context to get the rewarded video instance.
+                    sRewardedUnitID = msg.getData().getString("unitID");
+                    mRewardedVideoAd = MobileAds.getRewardedVideoAdInstance(mActivity);
+                    //mRewardedVideoAd.setRewardedVideoAdListener(mActivity);
+                    mRewardedVideoAd.setRewardedVideoAdListener(new RewardedVideoAdListener() {
+                        @Override
+                        public void onRewarded(RewardItem rewardItem) {
+                            mActivity.rewardPlayer = true;
+                        }
+
+                        @Override
+                        public void onRewardedVideoAdLoaded() {
+                        }
+
+                        @Override
+                        public void onRewardedVideoAdOpened() {
+                        }
+
+                        @Override
+                        public void onRewardedVideoCompleted() {
+                        }
+
+                        @Override
+                        public void onRewardedVideoStarted() {
+                        }
+
+                        @Override
+                        public void onRewardedVideoAdClosed() {
+                            // Load the next rewarded video ad.
+                            try {
+                            loadRewardedVideoAd();
+                            } catch (Exception e) {}
+                        }
+
+                        @Override
+                        public void onRewardedVideoAdLeftApplication() {
+                        }
+
+                        @Override
+                        public void onRewardedVideoAdFailedToLoad(int i) {
+                        }
+                    });
+
+                    loadRewardedVideoAd();
+                    break;
+                case REQ_BANNER: 
+                    for (String device : testDevices) {
+                        builder.addTestDevice(device);
+                    }
+                    builder.addTestDevice(AdRequest.DEVICE_ID_EMULATOR);
+                    AdRequest bannRequest = builder.build();
+                    adView.loadAd(bannRequest);
+                    break;
+                case REQ_INTERSTITIAL:
+                    if (msg.getData().containsKey("child")) {
+                        builder.tagForChildDirectedTreatment(msg.getData().getBoolean("child"));
+                    }
+                    if (msg.getData().containsKey("family")) { 
+                        Bundle extras = new Bundle();
+                        extras.putBoolean("is_designed_for_families",
+                            msg.getData().getBoolean("family"));
+                        builder.addNetworkExtrasBundle(AdMobAdapter.class, extras);
+                    }
+                    builder.addTestDevice(AdRequest.DEVICE_ID_EMULATOR);
+                    for (String device : testDevices) {
+                        builder.addTestDevice(device);
+                    }
+                    AdRequest interRequest = builder.build();
+                    interstitialAd.loadAd(interRequest);
+                    break;
+                case REQ_REWARDED:
+                    try {
+                        mRewardedVideoAd.loadAd(sRewardedUnitID, builder.build());
+                    } catch (Exception e) {}
+                    break;
+                case SHOW_BANNER:
+                    adView.setVisibility(View.VISIBLE);
+                    break;
+                case SHOW_INTERSTITIAL:
+                    if (interstitialAd.isLoaded()) { interstitialAd.show(); }
+                    break;
+                case SHOW_REWARDED:
+                    try {
+                    if (mRewardedVideoAd.isLoaded()) { 
+                        mActivity.rewardType = msg.getData().getString("reward_type");
+                        mRewardedVideoAd.show();
+                    }
+                    } catch (Exception e) {}
+                    break;
+                case HIDE_BANNER:
+                    adView.setVisibility(View.GONE);
+                    break;
+                default:
+                    break;
+        }
+    }
+    };
+
+    public static boolean isLoaded() {
+        return interstitialAd.isLoaded();
+    }
+
+    public static boolean isRewardedLoaded() {
+        return mRewardedVideoAd.isLoaded();
+    }
+
+   
+    @Override
+    public void onDestroy() {
+        try {
+            mRewardedVideoAd.destroy(mActivity);
+        }
+        catch (Exception e) {
+        }
+        try {
+            adView.destroy();
+            }
+        catch (Exception e) {}
+        super.onDestroy();
+    }
+
+    /* End of KivMob code. */
+
     public String getAppRoot() {
         String app_root =  getFilesDir().getAbsolutePath() + "/app";
         return app_root;
     }
 
+    @Override
+    protected void onStop() {
+        super.onStop();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -184,8 +413,8 @@ public class PythonActivity extends SDLActivity {
 
                 PowerManager pm = (PowerManager) mActivity.getSystemService(Context.POWER_SERVICE);
                 if ( mActivity.mMetaData.getInt("wakelock") == 1 ) {
-                	mActivity.mWakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "Screen On");
-                	mActivity.mWakeLock.acquire();
+                    mActivity.mWakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "Screen On");
+                    mActivity.mWakeLock.acquire();
                 }
                 if ( mActivity.mMetaData.getInt("surface.transparent") != 0 ) {
                     Log.v(TAG, "Surface will be transparent.");
@@ -341,7 +570,7 @@ public class PythonActivity extends SDLActivity {
         }
     }
 
-	public static void start_service(String serviceTitle, String serviceDescription,
+    public static void start_service(String serviceTitle, String serviceDescription,
                 String pythonServiceArgument) {
         Intent serviceIntent = new Intent(PythonActivity.mActivity, PythonService.class);
         String argument = PythonActivity.mActivity.getFilesDir().getAbsolutePath();
@@ -392,7 +621,7 @@ public class PythonActivity extends SDLActivity {
       runOnUiThread(new Runnable() {
         public void run() {
           if (PythonActivity.mImageView != null && 
-        		  PythonActivity.mImageView.getParent() != null) {
+                  PythonActivity.mImageView.getParent() != null) {
             ((ViewGroup)PythonActivity.mImageView.getParent()).removeView(
             PythonActivity.mImageView);
             PythonActivity.mImageView = null;
@@ -426,7 +655,7 @@ public class PythonActivity extends SDLActivity {
         mImageView.setImageBitmap(bitmap);
 
         /*
-	 * Set the presplash loading screen background color
+     * Set the presplash loading screen background color
          * https://developer.android.com/reference/android/graphics/Color.html
          * Parse the color string, and return the corresponding color-int.
          * If the string cannot be parsed, throws an IllegalArgumentException exception.
@@ -458,22 +687,42 @@ public class PythonActivity extends SDLActivity {
     
     @Override
     protected void onPause() {
-    	// fooabc
+        // fooabc
+        
         if ( this.mWakeLock != null &&  mWakeLock.isHeld()){
-        	this.mWakeLock.release();
+            this.mWakeLock.release();
         }
 
         Log.v(TAG, "onPause()");
+        //try {
+        //   adView.pause();
+        //    }
+        //catch (Exception e) {}
         super.onPause();
+        //try {
+        //    mRewardedVideoAd.pause(mActivity);
+        //}
+        //catch (Exception e) {
+        //}
     }
 
     @Override
     protected void onResume() {
-    	if ( this.mWakeLock != null){
-    		this.mWakeLock.acquire(); 
-    	}
-	    Log.v(TAG, "onResume()");
-	    super.onResume();
+        
+        if ( this.mWakeLock != null){
+            this.mWakeLock.acquire(); 
+        }
+        Log.v(TAG, "onResume()");
+        super.onResume();
+        //try {
+        //    adView.resume();
+        //    }
+        //catch (Exception e) {}
+        //try {
+        //    mRewardedVideoAd.resume(mActivity);
+        //}
+        //catch (Exception e) {
+        //}
     }
 
     

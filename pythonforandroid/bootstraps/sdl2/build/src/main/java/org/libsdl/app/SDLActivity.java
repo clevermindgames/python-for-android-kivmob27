@@ -27,11 +27,11 @@ import android.graphics.*;
 import android.graphics.drawable.Drawable;
 import android.media.*;
 import android.hardware.*;
-
+import android.support.v7.app.AppCompatActivity;
 /**
     SDL Activity
 */
-public class SDLActivity extends Activity {
+public class SDLActivity extends AppCompatActivity {
     private static final String TAG = "SDL";
 
     // Keep track of the paused state
