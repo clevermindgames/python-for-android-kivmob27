@@ -23,7 +23,6 @@ import android.widget.FrameLayout;
 import android.view.ViewGroup;
 import android.view.SurfaceView;
 import android.app.Activity;
-import android.content.Intent;
 import android.util.Log;
 import android.widget.Toast;
 import android.os.AsyncTask;
@@ -61,6 +60,14 @@ import org.kivy.android.launcher.Project;
 import org.renpy.android.ResourceManager;
 import org.renpy.android.AssetExtract;
 
+import com.crashlytics.android.Crashlytics;
+import io.fabric.sdk.android.Fabric;
+
+import java.lang.ref.WeakReference;
+import android.os.Looper;
+
+
+
 public class PythonActivity extends SDLActivity{
     private static final String TAG = "PythonActivity";
 
@@ -71,15 +78,16 @@ public class PythonActivity extends SDLActivity{
     private PowerManager.WakeLock mWakeLock = null;
 
     /* KivMob backend starts here. */
-    private static RewardedVideoAd mRewardedVideoAd = null;
-    private static String sRewardedUnitID;
-    private static AdView adView = null;
-    private static InterstitialAd interstitialAd = null;
-    private static ArrayList<String> testDevices = new ArrayList<String>();
+    private RewardedVideoAd mRewardedVideoAd = null;
+    private String sRewardedUnitID;
+    private AdView adView = null;
+    private InterstitialAd interstitialAd = null;
+    private ArrayList<String> testDevices = new ArrayList<String>();
+    private final AdRequest builder = new AdRequest.Builder().build();
     
 
     private static boolean rewardPlayer = false; //Updated to true when user has to be rewarded by watching Video to the end
-    private static String rewardType = ""; //Support for multiple types of rewards
+    private static String rewardType = ""; //Support for multiple reward types
 
     public static void playerRewarded() {
         rewardPlayer = false;
@@ -106,172 +114,187 @@ public class PythonActivity extends SDLActivity{
                                SHOW_REWARDED
                              };
 
-    public static void loadRewardedVideoAd() {
-        mRewardedVideoAd.loadAd(mActivity.sRewardedUnitID, new AdRequest.Builder().build());
+    //default Handler leaks memory due to implicit reference to activity. Using WeakReference to fix this 
+    private static class MyHandler extends Handler { 
+    private final WeakReference<PythonActivity> wrActivity;
+
+    public MyHandler(PythonActivity activity, Looper looper) {
+      wrActivity = new WeakReference<PythonActivity>(activity);
     }
-    // Handles all comunication to ad threads.
-    public static Handler adHandler = new Handler() {
+
     @Override
     public void handleMessage(Message msg) {
-            AdRequest.Builder builder = new AdRequest.Builder();
-        switch (AdCmd.values()[msg.what]) {
-                case INIT_ADS:
-                    if (mRewardedVideoAd != null) {
-                        mRewardedVideoAd.destroy(mActivity);
-                    }
-                    mRewardedVideoAd = null;
-                    interstitialAd = null;
-                    MobileAds.initialize(mActivity, msg.getData().getString("appID"));
-                    break;
-                case ADD_TEST_DEVICE:
-                    testDevices.add(msg.getData().getString("deviceID"));
-                    break;
-                case NEW_BANNER:
-                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        Gravity.CENTER_VERTICAL|Gravity.CENTER_HORIZONTAL);
-                    adView = new AdView(mActivity);
-                    adView.setAdSize(AdSize.SMART_BANNER);
-                    adView.setAdUnitId(msg.getData().getString("unitID"));
-                    adView.setLayoutParams(lp);
-                    adView.setVisibility(View.GONE);
-                    adView.setAdListener(new AdListener() {});
-                    ViewGroup layout = getLayout();
-                    layout.addView(adView);
-                    break;
-                case NEW_INTERSTITIAL:
-                    interstitialAd = new InterstitialAd(mActivity);
-                    interstitialAd.setAdUnitId(msg.getData().getString("unitID"));
-                    interstitialAd.setAdListener(new AdListener() {
-                        @Override
-                        public void onAdClosed() {
-                            // Load the next interstitial.
+      final PythonActivity activity = wrActivity.get();
+      if (activity != null) {
+          switch (AdCmd.values()[msg.what]) {
+                    case INIT_ADS:
+                        if (activity.mRewardedVideoAd != null) {
+                            activity.mRewardedVideoAd.destroy(activity);
+                        }
+                        activity.mRewardedVideoAd = null;
+                        activity.interstitialAd = null;
+                        if (activity.adView != null) {
                             try {
-                            interstitialAd.loadAd(new AdRequest.Builder().build());
+                                activity.adView.setVisibility(View.GONE);
+                                activity.adView.destroy();
                             } catch (Exception e) {}
+                            activity.adView = null;
                         }
-                    });
-                    break;
-                case NEW_REWARDED:
-                    // Use an activity context to get the rewarded video instance.
-                    sRewardedUnitID = msg.getData().getString("unitID");
-                    mRewardedVideoAd = MobileAds.getRewardedVideoAdInstance(mActivity);
-                    //mRewardedVideoAd.setRewardedVideoAdListener(mActivity);
-                    mRewardedVideoAd.setRewardedVideoAdListener(new RewardedVideoAdListener() {
-                        @Override
-                        public void onRewarded(RewardItem rewardItem) {
-                            mActivity.rewardPlayer = true;
+                        MobileAds.initialize(activity, msg.getData().getString("appID"));
+                        break;
+                    case ADD_TEST_DEVICE:
+                        activity.testDevices.add(msg.getData().getString("deviceID"));
+                        break;
+                    case NEW_BANNER:
+                        if (activity.adView != null) {
+                            activity.adView.setVisibility(View.GONE);
                         }
+                        else {
+                            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                                FrameLayout.LayoutParams.WRAP_CONTENT,
+                                FrameLayout.LayoutParams.WRAP_CONTENT,
+                                Gravity.CENTER_VERTICAL|Gravity.CENTER_HORIZONTAL);
+                            activity.adView = new AdView(activity);
+                            activity.adView.setAdSize(AdSize.SMART_BANNER);
+                            activity.adView.setAdUnitId(msg.getData().getString("unitID"));
+                            activity.adView.setLayoutParams(lp);
+                            activity.adView.setVisibility(View.GONE);
+                            activity.adView.setAdListener(new AdListener() {});
+                            ViewGroup layout = getLayout();
+                            layout.addView(activity.adView);
+                        }
+                        break;
+                    case NEW_INTERSTITIAL:
+                        activity.interstitialAd = new InterstitialAd(activity);
+                        activity.interstitialAd.setAdUnitId(msg.getData().getString("unitID"));
+                        activity.interstitialAd.setAdListener(new AdListener() {
+                            @Override
+                            public void onAdClosed() {
+                            }
+                        });
+                        activity.interstitialAd.loadAd(activity.builder);
+                        break;
+                    case NEW_REWARDED:
+                        // Use an activity context to get the rewarded video instance.
+                        activity.sRewardedUnitID = msg.getData().getString("unitID");
+                        activity.mRewardedVideoAd = MobileAds.getRewardedVideoAdInstance(activity);
+                        activity.mRewardedVideoAd.setRewardedVideoAdListener(new RewardedVideoAdListener() {
+                            @Override
+                            public void onRewarded(RewardItem rewardItem) {
+                                activity.rewardPlayer = true;
+                            }
 
-                        @Override
-                        public void onRewardedVideoAdLoaded() {
-                        }
+                            @Override
+                            public void onRewardedVideoAdLoaded() {
+                            }
 
-                        @Override
-                        public void onRewardedVideoAdOpened() {
-                        }
+                            @Override
+                            public void onRewardedVideoAdOpened() {
+                            }
 
-                        @Override
-                        public void onRewardedVideoCompleted() {
-                        }
+                            @Override
+                            public void onRewardedVideoCompleted() {
+                            }
 
-                        @Override
-                        public void onRewardedVideoStarted() {
-                        }
+                            @Override
+                            public void onRewardedVideoStarted() {
+                            }
 
-                        @Override
-                        public void onRewardedVideoAdClosed() {
-                            // Load the next rewarded video ad.
-                            try {
-                            loadRewardedVideoAd();
-                            } catch (Exception e) {}
-                        }
+                            @Override
+                            public void onRewardedVideoAdClosed() {
+                                // Load the next rewarded video ad.
+                                try {
+                                    activity.mRewardedVideoAd.loadAd(activity.sRewardedUnitID, activity.builder);
+                                } catch (Exception e) {}
+                            }
 
-                        @Override
-                        public void onRewardedVideoAdLeftApplication() {
-                        }
+                            @Override
+                            public void onRewardedVideoAdLeftApplication() {
+                            }
 
-                        @Override
-                        public void onRewardedVideoAdFailedToLoad(int i) {
+                            @Override
+                            public void onRewardedVideoAdFailedToLoad(int i) {
+                            }
+                        });
+                        activity.mRewardedVideoAd.loadAd(activity.sRewardedUnitID, activity.builder);
+                        
+                        break;
+                    case REQ_BANNER: 
+                        activity.adView.loadAd(activity.builder);
+                        break;
+                    case REQ_INTERSTITIAL:
+                        activity.interstitialAd.loadAd(activity.builder);
+                        break;
+                    case REQ_REWARDED:
+                        try {
+                            activity.mRewardedVideoAd.loadAd(activity.sRewardedUnitID, activity.builder);
+                        } catch (Exception e) {}
+                        
+                        break;
+                    case SHOW_BANNER:
+                        if (activity.adView != null) {
+                            activity.adView.setVisibility(View.VISIBLE);
                         }
-                    });
-
-                    loadRewardedVideoAd();
-                    break;
-                case REQ_BANNER: 
-                    for (String device : testDevices) {
-                        builder.addTestDevice(device);
-                    }
-                    builder.addTestDevice(AdRequest.DEVICE_ID_EMULATOR);
-                    AdRequest bannRequest = builder.build();
-                    adView.loadAd(bannRequest);
-                    break;
-                case REQ_INTERSTITIAL:
-                    if (msg.getData().containsKey("child")) {
-                        builder.tagForChildDirectedTreatment(msg.getData().getBoolean("child"));
-                    }
-                    if (msg.getData().containsKey("family")) { 
-                        Bundle extras = new Bundle();
-                        extras.putBoolean("is_designed_for_families",
-                            msg.getData().getBoolean("family"));
-                        builder.addNetworkExtrasBundle(AdMobAdapter.class, extras);
-                    }
-                    builder.addTestDevice(AdRequest.DEVICE_ID_EMULATOR);
-                    for (String device : testDevices) {
-                        builder.addTestDevice(device);
-                    }
-                    AdRequest interRequest = builder.build();
-                    interstitialAd.loadAd(interRequest);
-                    break;
-                case REQ_REWARDED:
-                    try {
-                        mRewardedVideoAd.loadAd(sRewardedUnitID, builder.build());
-                    } catch (Exception e) {}
-                    break;
-                case SHOW_BANNER:
-                    adView.setVisibility(View.VISIBLE);
-                    break;
-                case SHOW_INTERSTITIAL:
-                    if (interstitialAd.isLoaded()) { interstitialAd.show(); }
-                    break;
-                case SHOW_REWARDED:
-                    try {
-                    if (mRewardedVideoAd.isLoaded()) { 
-                        mActivity.rewardType = msg.getData().getString("reward_type");
-                        mRewardedVideoAd.show();
-                    }
-                    } catch (Exception e) {}
-                    break;
-                case HIDE_BANNER:
-                    adView.setVisibility(View.GONE);
-                    break;
-                default:
-                    break;
-        }
+                        break;
+                    case SHOW_INTERSTITIAL:
+                        if (activity.interstitialAd.isLoaded()) { activity.interstitialAd.show();}
+                        
+                        break;
+                    case SHOW_REWARDED:
+                        try {
+                            if (activity.mRewardedVideoAd.isLoaded()) {
+                                try {
+                                    activity.rewardType = msg.getData().getString("reward_type");
+                                    activity.mRewardedVideoAd.show();
+                                } catch (Exception e) {}
+                            }
+                        } catch (Exception e) {}
+                        
+                        break;
+                    case HIDE_BANNER:
+                        if (activity.adView != null) {
+                            activity.adView.setVisibility(View.GONE);
+                        }
+                        break;
+                    default:
+                        break;
+            } //switch
+      }
     }
-    };
+  }
 
-    public static boolean isLoaded() {
-        return interstitialAd.isLoaded();
+    public static void close_activity() {
+            System.exit(1);
+        }  
+
+    // Handles all comunication to ad threads.
+    //Looper.getMainLooper() required to run this Handler on UI thread. @run_on_ui_thread in kivmob27.py no longer required.
+    //@run_on_ui_thread leaks memory, prevents activity from closing correctly and leads to internal reference table overflow (max 512 refs allowed) if called many times - best not to use it until bugs are fixed
+    public final MyHandler adHandler = new MyHandler(this, Looper.getMainLooper()); 
+
+    public boolean isLoaded() {
+        return mActivity.interstitialAd.isLoaded();
     }
 
-    public static boolean isRewardedLoaded() {
-        return mRewardedVideoAd.isLoaded();
+    public boolean isRewardedLoaded() {
+        return mActivity.mRewardedVideoAd.isLoaded();
     }
 
    
     @Override
     public void onDestroy() {
         try {
-            mRewardedVideoAd.destroy(mActivity);
-        }
-        catch (Exception e) {
-        }
-        try {
-            adView.destroy();
-            }
-        catch (Exception e) {}
+                if (mActivity.mRewardedVideoAd != null) {
+                    Log.v(TAG, "onDestroy() mRewardedVideoAd.destroy");
+                    mActivity.mRewardedVideoAd.destroy(mActivity);
+                }
+                if (mActivity.adView != null) {
+                    Log.v(TAG, "before adView.destroy()");
+                    mActivity.adView.destroy();
+                    Log.v(TAG, "after adView.destroy()");
+                    mActivity.adView = null;
+                }
+            } catch (Exception e) {}
         super.onDestroy();
     }
 
@@ -295,11 +318,13 @@ public class PythonActivity extends SDLActivity{
         Log.v(TAG, "About to do super onCreate");
         super.onCreate(savedInstanceState);
         Log.v(TAG, "Did super onCreate");
+        Fabric.with(this, new Crashlytics());
 
         this.mActivity = this;
         this.showLoadingScreen();
 
         new UnpackFilesTask().execute(getAppRoot());
+
     }
 
     public void loadLibraries() {
@@ -687,23 +712,24 @@ public class PythonActivity extends SDLActivity{
     
     @Override
     protected void onPause() {
-        // fooabc
         
         if ( this.mWakeLock != null &&  mWakeLock.isHeld()){
             this.mWakeLock.release();
         }
 
         Log.v(TAG, "onPause()");
-        //try {
-        //   adView.pause();
-        //    }
-        //catch (Exception e) {}
+        try {
+            if (this.adView != null) {
+                Log.v(TAG, "before adView.pause()");
+                this.adView.pause();
+                Log.v(TAG, "after adView.pause()");
+            }
+            if (this.mRewardedVideoAd != null) {
+                Log.v(TAG, "onPause() mRewardedVideoAd.pause");
+                this.mRewardedVideoAd.pause(mActivity);
+            }
+        } catch (Exception e) {}
         super.onPause();
-        //try {
-        //    mRewardedVideoAd.pause(mActivity);
-        //}
-        //catch (Exception e) {
-        //}
     }
 
     @Override
@@ -712,17 +738,18 @@ public class PythonActivity extends SDLActivity{
         if ( this.mWakeLock != null){
             this.mWakeLock.acquire(); 
         }
+        
         Log.v(TAG, "onResume()");
         super.onResume();
-        //try {
-        //    adView.resume();
-        //    }
-        //catch (Exception e) {}
-        //try {
-        //    mRewardedVideoAd.resume(mActivity);
-        //}
-        //catch (Exception e) {
-        //}
+        if (this.adView != null) {
+            Log.v(TAG, "before adView.resume()");
+            this.adView.resume();
+            Log.v(TAG, "after adView.resume()");
+        }
+        if (this.mRewardedVideoAd != null) {
+            Log.v(TAG, "onResume() mRewardedVideoAd.resume");
+            this.mRewardedVideoAd.resume(mActivity);
+        }
     }
 
     
